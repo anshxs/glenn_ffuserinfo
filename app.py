@@ -259,10 +259,19 @@ def fetch_and_update():
                 "code": "PLAYER_DATA_NOT_FOUND"
             }), 404
         
-        # Extract required data
-        ff_name = player_data.get('nickname', '')
-        ff_creation_date = str(player_data.get('created_at', ''))
-        ff_level = player_data.get('level', 0)
+        # Extract required data from basicinfo
+        basic_info = player_data.get('basicinfo', {})
+        if not basic_info:
+            return jsonify({
+                "status": "error",
+                "error": "Incomplete Data",
+                "message": "No basicinfo found in player data",
+                "code": "INCOMPLETE_PLAYER_DATA"
+            }), 500
+        
+        ff_name = basic_info.get('nickname', '')
+        ff_creation_date = str(basic_info.get('createat', ''))
+        ff_level = basic_info.get('level', 0)
         
         if not ff_name or not ff_creation_date:
             return jsonify({
