@@ -15,6 +15,20 @@ CORS(app)
 GLENN_BACKEND_URL = "https://glenn-backend.vercel.app"
 
 
+@app.route('/', methods=['GET'])
+def index():
+    """Health check endpoint"""
+    return jsonify({
+        "status": "success",
+        "message": "Free Fire User Info API is running",
+        "version": "1.0",
+        "endpoints": [
+            "GET /get_user_info?uid={ffuid}",
+            "POST /fetch_and_update"
+        ]
+    }), 200
+
+
 @app.route('/get_user_info', methods=['GET'])
 def get_user_info():
     """
