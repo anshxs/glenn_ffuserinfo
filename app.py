@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import json
 import requests
-from Utilities.until import load_accounts
+from Utilities.until import load_accounts, get_rotating_accounts
 from Api.Account import get_garena_token, get_major_login
 from Api.InGame import get_player_personal_show
 
@@ -13,6 +13,45 @@ CORS(app)
 
 # Backend URL for updating database
 GLENN_BACKEND_URL = "https://glenn-backend.vercel.app"
+
+
+def fetch_player_data_with_account_rotation(uid_int, server='IND'):
+    """Try accounts in random order and return player data from first successful account."""
+    rotating_accounts = get_rotating_accounts(accounts, server)
+    if not rotating_accounts:
+        return None, 'SERVER_CONFIG_ERROR', 'No valid account credentials configured for IND server.'
+
+    last_error_code = 'GARENA_AUTH_FAILED'
+    last_error_message = 'Failed to obtain Garena token.'
+
+    for account in rotating_accounts:
+        garena_token_result = get_garena_token(account['uid'], account['password'])
+        if not garena_token_result or 'access_token' not in garena_token_result or 'open_id' not in garena_token_result:
+            last_error_code = 'GARENA_AUTH_FAILED'
+            last_error_message = 'Failed to obtain Garena token.'
+            continue
+
+        major_login_result = get_major_login(garena_token_result['access_token'], garena_token_result['open_id'])
+        if not major_login_result or 'serverUrl' not in major_login_result or 'token' not in major_login_result:
+            last_error_code = 'MAJOR_LOGIN_FAILED'
+            last_error_message = 'Failed to perform major login.'
+            continue
+
+        player_data = get_player_personal_show(
+            major_login_result['serverUrl'],
+            major_login_result['token'],
+            uid_int,
+            need_gallery_info=False,
+            call_sign_src=7,
+        )
+        if not player_data:
+            last_error_code = 'PLAYER_DATA_NOT_FOUND'
+            last_error_message = f'No player data found for UID: {uid_int}'
+            continue
+
+        return player_data, None, None
+
+    return None, last_error_code, last_error_message
 
 
 @app.route('/', methods=['GET'])
@@ -77,8 +116,8 @@ def get_user_info():
             }
             return jsonify(response), 400
         
-        # Check if server account credentials exist
-        if 'uid' not in accounts[server] or 'password' not in accounts[server]:
+        # Check if at least one valid server account credential exists
+        if not get_rotating_accounts(accounts, server):
             response = {
                 "status": "error",
                 "error": "Server Configuration Error",
@@ -86,46 +125,35 @@ def get_user_info():
                 "code": "SERVER_CONFIG_ERROR"
             }
             return jsonify(response), 500
-        
-        # Step 1: Get Garena token
-        garena_token_result = get_garena_token(accounts[server]['uid'], accounts[server]['password'])
-        if not garena_token_result or 'access_token' not in garena_token_result or 'open_id' not in garena_token_result:
-            response = {
-                "status": "error",
-                "error": "Authentication Failed",
-                "message": "Failed to obtain Garena token. Invalid credentials or service unavailable.",
-                "code": "GARENA_AUTH_FAILED"
-            }
-            return jsonify(response), 401
-        
-        # Step 2: Get major login
-        major_login_result = get_major_login(garena_token_result["access_token"], garena_token_result["open_id"])
-        if not major_login_result or 'serverUrl' not in major_login_result or 'token' not in major_login_result:
-            response = {
-                "status": "error",
-                "error": "Login Failed",
-                "message": "Failed to perform major login. Service unavailable.",
-                "code": "MAJOR_LOGIN_FAILED"
-            }
-            return jsonify(response), 401
-        
-        # Step 3: Get player personal show data
-        player_data = get_player_personal_show(
-            major_login_result["serverUrl"], 
-            major_login_result["token"], 
-            uid_int, 
-            need_gallery_info=False,
-            call_sign_src=7
-        )
 
+        player_data, error_code, error_message = fetch_player_data_with_account_rotation(uid_int, server)
         if not player_data:
+            if error_code == 'PLAYER_DATA_NOT_FOUND':
+                response = {
+                    "status": "error",
+                    "error": "Data Not Found",
+                    "message": error_message,
+                    "code": error_code
+                }
+                return jsonify(response), 404
+
+            if error_code == 'SERVER_CONFIG_ERROR':
+                response = {
+                    "status": "error",
+                    "error": "Server Configuration Error",
+                    "message": error_message,
+                    "code": error_code
+                }
+                return jsonify(response), 500
+
+            error_title = "Authentication Failed" if error_code == 'GARENA_AUTH_FAILED' else "Login Failed"
             response = {
                 "status": "error",
-                "error": "Data Not Found",
-                "message": f"No player data found for UID: {uid_int}",
-                "code": "PLAYER_DATA_NOT_FOUND"
+                "error": error_title,
+                "message": f"{error_message} Tried all configured accounts.",
+                "code": error_code
             }
-            return jsonify(response), 404
+            return jsonify(response), 401
         
         # Success response
         response = {
@@ -213,51 +241,40 @@ def fetch_and_update():
         # Always use Indian server
         server = 'IND'
         
-        # Check server credentials
-        if 'uid' not in accounts[server] or 'password' not in accounts[server]:
+        # Check if at least one valid server account credential exists
+        if not get_rotating_accounts(accounts, server):
             return jsonify({
                 "status": "error",
                 "error": "Server Configuration Error",
                 "message": f"Server '{server}' is missing required credentials",
                 "code": "SERVER_CONFIG_ERROR"
             }), 500
-        
-        # Step 1: Get Garena token
-        garena_token_result = get_garena_token(accounts[server]['uid'], accounts[server]['password'])
-        if not garena_token_result or 'access_token' not in garena_token_result or 'open_id' not in garena_token_result:
-            return jsonify({
-                "status": "error",
-                "error": "Authentication Failed",
-                "message": "Failed to obtain Garena token",
-                "code": "GARENA_AUTH_FAILED"
-            }), 401
-        
-        # Step 2: Get major login
-        major_login_result = get_major_login(garena_token_result["access_token"], garena_token_result["open_id"])
-        if not major_login_result or 'serverUrl' not in major_login_result or 'token' not in major_login_result:
-            return jsonify({
-                "status": "error",
-                "error": "Login Failed",
-                "message": "Failed to perform major login",
-                "code": "MAJOR_LOGIN_FAILED"
-            }), 401
-        
-        # Step 3: Get player personal show data
-        player_data = get_player_personal_show(
-            major_login_result["serverUrl"], 
-            major_login_result["token"], 
-            uid_int, 
-            need_gallery_info=False,
-            call_sign_src=7
-        )
 
+        player_data, error_code, error_message = fetch_player_data_with_account_rotation(uid_int, server)
         if not player_data:
+            if error_code == 'PLAYER_DATA_NOT_FOUND':
+                return jsonify({
+                    "status": "error",
+                    "error": "Data Not Found",
+                    "message": error_message,
+                    "code": error_code
+                }), 404
+
+            if error_code == 'SERVER_CONFIG_ERROR':
+                return jsonify({
+                    "status": "error",
+                    "error": "Server Configuration Error",
+                    "message": error_message,
+                    "code": error_code
+                }), 500
+
+            error_title = "Authentication Failed" if error_code == 'GARENA_AUTH_FAILED' else "Login Failed"
             return jsonify({
                 "status": "error",
-                "error": "Data Not Found",
-                "message": f"No player data found for UID: {uid_int}",
-                "code": "PLAYER_DATA_NOT_FOUND"
-            }), 404
+                "error": error_title,
+                "message": f"{error_message} Tried all configured accounts.",
+                "code": error_code
+            }), 401
         
         # Extract required data from basicinfo
         basic_info = player_data.get('basicinfo', {})

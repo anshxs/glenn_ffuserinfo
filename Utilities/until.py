@@ -1,4 +1,5 @@
 import json
+import random
 from google.protobuf.message import Message
 from google.protobuf import json_format, message
 from Crypto.Cipher import AES
@@ -13,6 +14,33 @@ def load_accounts():
         raise Exception("AccountConfiguration.json file not found")
     except json.JSONDecodeError:
         raise Exception("Error parsing AccountConfiguration.json")
+
+
+def _is_valid_account(candidate):
+    return (
+        isinstance(candidate, dict)
+        and str(candidate.get('uid', '')).strip() != ''
+        and str(candidate.get('password', '')).strip() != ''
+    )
+
+
+def get_rotating_accounts(accounts_config, server='IND'):
+    """
+    Return valid account credentials in randomized order for fallback retries.
+
+    Supports both formats:
+    1. {"IND": {"uid": "...", "password": "..."}}
+    2. {"IND": [{"uid": "...", "password": "..."}, ...]}
+    """
+    server_config = accounts_config.get(server)
+    if server_config is None:
+        return []
+
+    account_list = server_config if isinstance(server_config, list) else [server_config]
+    valid_accounts = [account for account in account_list if _is_valid_account(account)]
+
+    random.SystemRandom().shuffle(valid_accounts)
+    return valid_accounts
 
 def pad(text: bytes) -> bytes:
     padding_length = AES.block_size - (len(text) % AES.block_size)
